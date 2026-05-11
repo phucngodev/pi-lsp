@@ -1,4 +1,4 @@
-import { describe, it, afterEach } from "node:test";
+import { describe, it, before, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,6 +10,8 @@ const goConfig = languages.find((l) => l.id === "go")!;
 
 let tempDirs: string[] = [];
 let managers: ReturnType<typeof createServerManager>[] = [];
+let sharedDir: string;
+let sharedManager: ReturnType<typeof createServerManager>;
 
 async function makeTempDir(): Promise<string> {
   const dir = join(tmpdir(), `pi-lsp-gopls-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -25,13 +27,29 @@ function makeManager() {
 }
 
 afterEach(async () => {
-  for (const m of managers) await m.shutdownAll();
+  for (const m of managers) {
+    if (m !== sharedManager) await m.shutdownAll();
+  }
   managers = [];
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) {
+    if (dir !== sharedDir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
   tempDirs = [];
 });
 
 describe("gopls integration", { skip: !process.env.INTEGRATION }, () => {
+  before(async () => {
+    // warmup: spawn gopls and let it index a minimal module
+    sharedDir = await makeTempDir();
+    await writeFile(join(sharedDir, "go.mod"), "module example.com/test\n\ngo 1.21\n");
+    const warmupFile = join(sharedDir, "warmup.go");
+    await writeFile(warmupFile, "package main\n");
+    sharedManager = makeManager();
+    // allow up to 30s for cold start (module download, indexing)
+    await sharedManager.handleEdit(warmupFile, goConfig, sharedDir);
+    await sharedManager.shutdownAll();
+  });
+
   it("reports syntax error", async () => {
     const dir = await makeTempDir();
     await writeFile(join(dir, "go.mod"), "module example.com/test\n\ngo 1.21\n");
@@ -69,12 +87,10 @@ describe("gopls integration", { skip: !process.env.INTEGRATION }, () => {
     );
 
     const manager = makeManager();
-
-    // first edit: open both files so gopls knows about them
     await manager.handleEdit(join(dir, "main.go"), goConfig, dir);
     await manager.handleEdit(join(dir, "lib.go"), goConfig, dir);
 
-    // break the signature: change Add to take 3 args
+    // break the signature
     await writeFile(
       join(dir, "lib.go"),
       "package main\n\nfunc Add(a, b, c int) int {\n\treturn a + b + c\n}\n",
@@ -82,7 +98,6 @@ describe("gopls integration", { skip: !process.env.INTEGRATION }, () => {
     const result = await manager.handleEdit(join(dir, "lib.go"), goConfig, dir);
     assert.equal(result.status, "ok");
 
-    // either lib.go or main.go should have diagnostics about the argument count mismatch
     const totalDiags = result.diagnostics.length + result.otherFiles.reduce((s, f) => s + f.errorCount, 0);
     assert.ok(totalDiags > 0, "expected diagnostics from cross-file breakage");
   });

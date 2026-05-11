@@ -1,4 +1,4 @@
-import { describe, it, afterEach } from "node:test";
+import { describe, it, before, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,6 +11,8 @@ if (!tsConfig) throw new Error("typescript config not found in languages");
 
 let tempDirs: string[] = [];
 let managers: ReturnType<typeof createServerManager>[] = [];
+let sharedDir: string;
+let sharedManager: ReturnType<typeof createServerManager>;
 
 async function makeTempDir(): Promise<string> {
   const dir = join(tmpdir(), `pi-lsp-ts-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -26,13 +28,30 @@ function makeManager() {
 }
 
 afterEach(async () => {
-  for (const m of managers) await m.shutdownAll();
+  for (const m of managers) {
+    if (m !== sharedManager) await m.shutdownAll();
+  }
   managers = [];
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) {
+    if (dir !== sharedDir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
   tempDirs = [];
 });
 
 describe("typescript-language-server integration", { skip: !process.env.INTEGRATION }, () => {
+  before(async () => {
+    // warmup: spawn typescript-language-server and let it initialize
+    sharedDir = await makeTempDir();
+    await writeFile(
+      join(sharedDir, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { strict: true, noEmit: true } }),
+    );
+    await writeFile(join(sharedDir, "warmup.ts"), "const x = 1;\n");
+    sharedManager = makeManager();
+    await sharedManager.handleEdit(join(sharedDir, "warmup.ts"), tsConfig, sharedDir);
+    await sharedManager.shutdownAll();
+  });
+
   it("reports type error", async () => {
     const dir = await makeTempDir();
     await writeFile(
@@ -79,12 +98,10 @@ describe("typescript-language-server integration", { skip: !process.env.INTEGRAT
     );
 
     const manager = makeManager();
-
-    // open both files
     await manager.handleEdit(join(dir, "main.ts"), tsConfig, dir);
     await manager.handleEdit(join(dir, "lib.ts"), tsConfig, dir);
 
-    // break the signature: change add to require 3 args
+    // break the signature
     await writeFile(
       join(dir, "lib.ts"),
       "export function add(a: number, b: number, c: number): number {\n  return a + b + c;\n}\n",

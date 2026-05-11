@@ -1,4 +1,4 @@
-import { describe, it, afterEach } from "node:test";
+import { describe, it, before, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,6 +10,8 @@ const rustConfig = languages.find((l) => l.id === "rust")!;
 
 let tempDirs: string[] = [];
 let managers: ReturnType<typeof createServerManager>[] = [];
+let sharedDir: string;
+let sharedManager: ReturnType<typeof createServerManager>;
 
 async function makeTempDir(): Promise<string> {
   const dir = join(tmpdir(), `pi-lsp-rust-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -25,13 +27,32 @@ function makeManager() {
 }
 
 afterEach(async () => {
-  for (const m of managers) await m.shutdownAll();
+  for (const m of managers) {
+    if (m !== sharedManager) await m.shutdownAll();
+  }
   managers = [];
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) {
+    if (dir !== sharedDir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
   tempDirs = [];
 });
 
 describe("rust-analyzer integration", { skip: !process.env.INTEGRATION }, () => {
+  before(async () => {
+    // warmup: spawn rust-analyzer and let it index a minimal crate
+    sharedDir = await makeTempDir();
+    await writeFile(
+      join(sharedDir, "Cargo.toml"),
+      '[package]\nname = "warmup"\nversion = "0.1.0"\nedition = "2021"\n',
+    );
+    const srcDir = join(sharedDir, "src");
+    await mkdir(srcDir, { recursive: true });
+    await writeFile(join(srcDir, "main.rs"), "fn main() {}\n");
+    sharedManager = makeManager();
+    await sharedManager.handleEdit(join(srcDir, "main.rs"), rustConfig, sharedDir);
+    await sharedManager.shutdownAll();
+  });
+
   it("reports syntax error", async () => {
     const dir = await makeTempDir();
     await writeFile(
@@ -84,11 +105,10 @@ describe("rust-analyzer integration", { skip: !process.env.INTEGRATION }, () => 
     );
 
     const manager = makeManager();
-
     await manager.handleEdit(join(srcDir, "main.rs"), rustConfig, dir);
     await manager.handleEdit(join(srcDir, "lib.rs"), rustConfig, dir);
 
-    // break the signature: change add to take 3 args
+    // break the signature
     await writeFile(
       join(srcDir, "lib.rs"),
       "pub fn add(a: i32, b: i32, c: i32) -> i32 {\n    a + b + c\n}\n",
