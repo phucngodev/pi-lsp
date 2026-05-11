@@ -29,8 +29,7 @@ export default function (pi: ExtensionAPI) {
       const formatted = formatDiagnostics(filePath, result);
       if (!formatted) return;
 
-      const hasErrors = result.diagnostics.some((d) => d.severity === 1);
-      ctx.ui.notify(formatted.trim(), hasErrors ? "error" : "warning");
+      ctx.ui.notify(formatted.trim(), "warning");
 
       return {
         content: [...event.content, { type: "text" as const, text: formatted }],
