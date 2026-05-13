@@ -14,10 +14,10 @@ npm install
 # typecheck
 npm run check
 
-# unit tests (no servers required, ~18s)
+# unit tests (no servers required, 106 tests)
 npm test
 
-# integration tests (requires gopls, rust-analyzer, typescript-language-server on PATH)
+# integration tests (requires gopls, rust-analyzer, typescript-language-server, pylsp, clangd on PATH)
 npm run test:integration
 
 # test in pi
@@ -36,7 +36,7 @@ Use a fake LSP server (`test/fake-server.ts`) that speaks JSON-RPC over stdio wi
 
 ### Integration tests (`test/integration/*.test.ts`)
 
-Guarded by `process.env.INTEGRATION`. Each suite has a `before()` warmup hook that absorbs cold-start latency. Require real servers on PATH.
+Guarded by `process.env.INTEGRATION`. Each suite shares a warm server instance within a single workspace. Tests use polling patterns for assertions to handle async diagnostic publishing. Require real servers on PATH.
 
 Run with:
 
@@ -68,5 +68,6 @@ npm run test:integration
 ## Submitting changes
 
 - One logical change per commit
+- All PRs require CI to pass (typecheck + unit tests + 5 per-server integration jobs)
 - Run `npm run check && npm test` before pushing
-- Integration tests are optional for PRs but appreciated
+- Integration tests run automatically on PR via per-server CI jobs
