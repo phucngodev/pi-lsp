@@ -29,7 +29,7 @@ export const builtinLanguages: LanguageServerConfig[] = [
   {
     id: "typescript",
     extensions: [".ts", ".tsx", ".js", ".jsx"],
-    command: "tsgo",
+    command: "tsc",
     args: ["--lsp", "--stdio"],
     rootPatterns: ["tsconfig.json", "package.json"],
     diagnosticTimeout: 30_000,
